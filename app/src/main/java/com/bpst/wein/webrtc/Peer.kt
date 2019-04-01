@@ -3,14 +3,8 @@ package com.bpst.wein.webrtc
 import android.content.Context
 import android.os.Build
 import android.util.Log
-import com.bpst.wein.BuildConfig
 import org.webrtc.*
-import org.webrtc.audio.AudioDeviceModule
-import java.lang.Exception
 import org.webrtc.MediaConstraints
-import android.R.attr.y
-import android.R.attr.x
-
 
 
 class Peer : PeerConnection.Observer, SdpObserver {
@@ -22,11 +16,13 @@ class Peer : PeerConnection.Observer, SdpObserver {
     private lateinit var factory: PeerConnectionFactory
     private val rootEglBase = EglBase.create()
 
-    private val iceServers: List<PeerConnection.IceServer> = arrayListOf()
+    private val iceServers: List<PeerConnection.IceServer> = arrayListOf(
+        PeerConnection.IceServer.builder("stun:74.125.140.127:19302").createIceServer(),
+     PeerConnection.IceServer.builder("stun:[2A00:1450:400C:C08::7F]:19302").createIceServer())
 
     private var onOffer: ((SessionDescription) -> Unit)? = null
     private var onAnswer: ((SessionDescription) -> Unit)? = null
-    private var localStream:MediaStream? = null
+    private var onGotStream:((MediaStream) -> Unit)? = null
 
     fun initialize(context: Context) {
         val fieldTrials = (PeerConnectionFactory.VIDEO_FRAME_EMIT_TRIAL + "/" + PeerConnectionFactory.TRIAL_ENABLED + "/")
@@ -39,7 +35,11 @@ class Peer : PeerConnection.Observer, SdpObserver {
                 },Logging.Severity.LS_ERROR)
                 .createInitializationOptions()
         )
-        factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+        factory = PeerConnectionFactory.builder()
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(rootEglBase.eglBaseContext))
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true))
+            .createPeerConnectionFactory()
+        factory.printInternalStackTraces(true)
 
 
     }
@@ -53,7 +53,7 @@ class Peer : PeerConnection.Observer, SdpObserver {
                 }
 
         videoSource = factory.createVideoSource(false)
-        videoTrack = factory.createVideoTrack("video", videoSource)
+        videoTrack = factory.createVideoTrack("_video", videoSource)
         videoCapturer?.initialize(
             SurfaceTextureHelper.create("101", rootEglBase.eglBaseContext),
             context,
@@ -61,23 +61,27 @@ class Peer : PeerConnection.Observer, SdpObserver {
         )
         viewRenderer.init(rootEglBase.eglBaseContext, null)
         viewRenderer.setMirror(true)
+
         videoTrack.addSink(viewRenderer)
         videoCapturer?.startCapture(640, 480, 30)
 
         val videoConstraints = MediaConstraints()
         val audioSource = factory.createAudioSource(videoConstraints)
-        val audioTrack = factory.createAudioTrack("audio", audioSource)
+        val audioTrack = factory.createAudioTrack("_audio", audioSource)
 
-
-        //localStream?.addTrack(videoTrack)
-        localStream?.addTrack(audioTrack)
+        val mediaStreamLabels = listOf("ARDAMS")
+        peerConnection?.addTrack(videoTrack, mediaStreamLabels)
+        peerConnection?.addTrack(audioTrack, mediaStreamLabels)
     }
 
 
+    fun gotStraemCallback(callback: (MediaStream) -> Unit){
+        onGotStream = callback
+    }
     fun createPeer() {
-        peerConnection = factory.createPeerConnection(iceServers, this)
-        localStream = factory.createLocalMediaStream("localMedia")
-        peerConnection?.addStream(localStream)
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
+        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        peerConnection = factory.createPeerConnection(rtcConfig, this)
 
     }
 
@@ -88,16 +92,16 @@ class Peer : PeerConnection.Observer, SdpObserver {
 
     fun createOffer(callback: ((SessionDescription) -> Unit)) {
         onOffer = callback
+
+        peerConnection?.setAudioRecording(true)
+        peerConnection?.startRtcEventLog(0, 200)
         peerConnection?.createOffer(this, MediaConstraints())
-        localStream?.addTrack(videoTrack)
     }
 
     fun setRemoteSdp(seesiondescription: SessionDescription?) {
         peerConnection?.setRemoteDescription(this, seesiondescription)
 
     }
-
-
     fun setLocalSdp(seesiondescription: SessionDescription?) {
         peerConnection?.setLocalDescription(this, seesiondescription)
     }
@@ -149,9 +153,7 @@ class Peer : PeerConnection.Observer, SdpObserver {
         Log.i("Peer Observer", "[onAddStream($p0)]")
         p0?.let { stream ->
             print(stream.audioTracks.size)
-            val track = stream.audioTracks.first()
-            track.setEnabled(true)
-            track.setVolume(1.0)
+            onGotStream?.invoke(stream)
         }
     }
 

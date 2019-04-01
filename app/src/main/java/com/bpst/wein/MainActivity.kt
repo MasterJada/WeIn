@@ -8,6 +8,7 @@ import android.support.v4.app.ActivityCompat
 import android.support.v4.content.ContextCompat
 import com.bpst.wein.webrtc.Peer
 import kotlinx.android.synthetic.main.activity_main.*
+import org.webrtc.EglBase
 
 class MainActivity : AppCompatActivity() {
     val peer = Peer()
@@ -18,10 +19,17 @@ class MainActivity : AppCompatActivity() {
         peer.initialize(applicationContext)
         peer2.initialize(applicationContext)
 
-
+        val egl = EglBase.create()
+        incoming_video.init(egl.eglBaseContext, null)
         peer.createPeer()
         peer2.createPeer()
-
+        peer2.gotStraemCallback {
+            it.videoTracks.firstOrNull()?.let {
+                it.addSink { videoFrame ->
+                    print("")
+                }
+            }
+        }
         startCamera()
         bt_call.setOnClickListener {
                 peer.createOffer{
@@ -29,6 +37,7 @@ class MainActivity : AppCompatActivity() {
                     peer2.createAnswer {
                         peer.setRemoteSdp(it)
                     }
+
                 }
         }
         if(ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_NETWORK_STATE) == PackageManager.PERMISSION_DENIED){

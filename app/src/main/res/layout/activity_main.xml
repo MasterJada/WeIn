@@ -7,6 +7,15 @@
         android:layout_height="match_parent"
         tools:context=".MainActivity">
     <org.webrtc.SurfaceViewRenderer
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:id="@+id/incoming_video"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+    />
+    <org.webrtc.SurfaceViewRenderer
             android:id="@+id/outgoing_video"
             android:layout_width="100dp"
             android:layout_height="120dp"
