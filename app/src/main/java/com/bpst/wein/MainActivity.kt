@@ -10,47 +10,35 @@ import com.bpst.wein.webrtc.Peer
 import kotlinx.android.synthetic.main.activity_main.*
 import org.webrtc.EglBase
 
+
 class MainActivity : AppCompatActivity() {
-    val peer = Peer()
-    val peer2 = Peer()
+    private val peer by lazy { Peer.PeerBuilder().createPeer(this, EglBase.create()) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        peer.initialize(applicationContext)
-        peer2.initialize(applicationContext)
 
-        val egl = EglBase.create()
-        incoming_video.init(egl.eglBaseContext, null)
-        peer.createPeer()
-        peer2.createPeer()
-        peer2.gotStraemCallback {
-            it.videoTracks.firstOrNull()?.let {
-                it.addSink { videoFrame ->
-                    print("")
-                }
-            }
-        }
+        peer.initLocalView(outgoing_video)
         startCamera()
-        bt_call.setOnClickListener {
-                peer.createOffer{
-                    peer2.setRemoteSdp(it)
-                    peer2.createAnswer {
-                        peer.setRemoteSdp(it)
-                    }
 
-                }
+        bt_call.setOnClickListener {
+
         }
+
         if(ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_NETWORK_STATE) == PackageManager.PERMISSION_DENIED){
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_NETWORK_STATE), 101)
         }
     }
+
+
+
 
     private fun startCamera(){
         if(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_DENIED){
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 100)
             return
         }
-        peer.startCamera(outgoing_video, this)
+        peer.startCamera( this)
 
     }
 

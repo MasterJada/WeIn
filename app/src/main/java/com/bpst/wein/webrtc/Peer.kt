@@ -1,120 +1,69 @@
 package com.bpst.wein.webrtc
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import org.webrtc.*
 import org.webrtc.MediaConstraints
 
 
-class Peer : PeerConnection.Observer, SdpObserver {
+class Peer: PeerConnection.Observer, SdpObserver {
+
+    private constructor(id: String = "")
 
     private var videoCapturer: VideoCapturer? = null
     private lateinit var videoSource: VideoSource
-    private lateinit var videoTrack: VideoTrack
-    private var peerConnection: PeerConnection? = null
+    lateinit var videoTrack: VideoTrack
+    var peerConnection: PeerConnection? = null
     private lateinit var factory: PeerConnectionFactory
-    private val rootEglBase = EglBase.create()
+    private lateinit var rootEglBase: EglBase
 
-    private val iceServers: List<PeerConnection.IceServer> = arrayListOf(
-        PeerConnection.IceServer.builder("stun:74.125.140.127:19302").createIceServer(),
-     PeerConnection.IceServer.builder("stun:[2A00:1450:400C:C08::7F]:19302").createIceServer())
+    private val iceServers: List<PeerConnection.IceServer> = arrayListOf()
 
     private var onOffer: ((SessionDescription) -> Unit)? = null
     private var onAnswer: ((SessionDescription) -> Unit)? = null
-    private var onGotStream:((MediaStream) -> Unit)? = null
+    private var onGotStream: ((VideoTrack) -> Unit)? = null
+    private var onIceCandidate: ((IceCandidate?) -> Unit)? = null
 
-    fun initialize(context: Context) {
-        val fieldTrials = (PeerConnectionFactory.VIDEO_FRAME_EMIT_TRIAL + "/" + PeerConnectionFactory.TRIAL_ENABLED + "/")
+    fun initialize(context: Context, eglContext: EglBase) {
+        rootEglBase = eglContext
+
+        val fieldTrials =
+            (PeerConnectionFactory.VIDEO_FRAME_EMIT_TRIAL + "/" + PeerConnectionFactory.TRIAL_ENABLED + "/")
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(context)
                 .setFieldTrials(fieldTrials)
-                .setEnableInternalTracer(true)
-                .setInjectableLogger({s, severity, sev ->
-                    Log.i("Peer log", s)
-                },Logging.Severity.LS_ERROR)
                 .createInitializationOptions()
         )
+
         factory = PeerConnectionFactory.builder()
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(rootEglBase.eglBaseContext))
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true))
             .createPeerConnectionFactory()
-        factory.printInternalStackTraces(true)
 
+        factory.printInternalStackTraces(true)
+        createPeer()
 
     }
 
-    fun startCamera(viewRenderer: SurfaceViewRenderer, context: Context) {
-        videoCapturer =
-                if (Build.VERSION.SDK_INT > Build.VERSION_CODES.LOLLIPOP) {
-                    createCameraCapturer(Camera2Enumerator(context))
-                } else {
-                    createCameraCapturer(Camera1Enumerator(true))
-                }
+    /**
+     * Parameter to init VideoView which will be used to show local camera
+     */
+    fun initLocalView(viewRenderer: SurfaceViewRenderer) {
+        viewRenderer.init(rootEglBase.eglBaseContext, null)
+        viewRenderer.setMirror(true)
+        videoTrack.addSink(viewRenderer)
+    }
 
-        videoSource = factory.createVideoSource(false)
-        videoTrack = factory.createVideoTrack("_video", videoSource)
+    fun startCamera(context: Context, height: Int = 1280, width: Int = 720, fps: Int = 30) {
+        videoCapturer = createCameraCapturer(Camera1Enumerator(false))
         videoCapturer?.initialize(
-            SurfaceTextureHelper.create("101", rootEglBase.eglBaseContext),
+            SurfaceTextureHelper.create("CaptureThread", rootEglBase.eglBaseContext),
             context,
             videoSource.capturerObserver
         )
-        viewRenderer.init(rootEglBase.eglBaseContext, null)
-        viewRenderer.setMirror(true)
-
-        videoTrack.addSink(viewRenderer)
-        videoCapturer?.startCapture(640, 480, 30)
-
-        val videoConstraints = MediaConstraints()
-        val audioSource = factory.createAudioSource(videoConstraints)
-        val audioTrack = factory.createAudioTrack("_audio", audioSource)
-
-        val mediaStreamLabels = listOf("ARDAMS")
-        peerConnection?.addTrack(videoTrack, mediaStreamLabels)
-        peerConnection?.addTrack(audioTrack, mediaStreamLabels)
+        videoCapturer?.startCapture(height, width, fps)
     }
 
-
-    fun gotStraemCallback(callback: (MediaStream) -> Unit){
-        onGotStream = callback
-    }
-    fun createPeer() {
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
-        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        peerConnection = factory.createPeerConnection(rtcConfig, this)
-
-    }
-
-    fun createOffer() {
-        peerConnection?.createOffer(this, MediaConstraints())
-
-    }
-
-    fun createOffer(callback: ((SessionDescription) -> Unit)) {
-        onOffer = callback
-
-        peerConnection?.setAudioRecording(true)
-        peerConnection?.startRtcEventLog(0, 200)
-        peerConnection?.createOffer(this, MediaConstraints())
-    }
-
-    fun setRemoteSdp(seesiondescription: SessionDescription?) {
-        peerConnection?.setRemoteDescription(this, seesiondescription)
-
-    }
-    fun setLocalSdp(seesiondescription: SessionDescription?) {
-        peerConnection?.setLocalDescription(this, seesiondescription)
-    }
-
-
-    fun createAnswer() {
-        peerConnection?.createAnswer(this, MediaConstraints())
-    }
-
-    fun createAnswer(callback: ((SessionDescription) -> Unit)) {
-        onAnswer = callback
-        peerConnection?.createAnswer(this, MediaConstraints())
-    }
 
     private fun createCameraCapturer(enumerator: CameraEnumerator): VideoCapturer? {
         val deviceNames = enumerator.deviceNames
@@ -128,9 +77,59 @@ class Peer : PeerConnection.Observer, SdpObserver {
         return null
     }
 
+    private fun createPeer() {
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
+        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+
+        peerConnection = factory.createPeerConnection(rtcConfig, this)
+
+        videoSource = factory.createVideoSource(false)
+        videoTrack = factory.createVideoTrack("_video", videoSource)
+        videoTrack.setEnabled(true)
+        val videoConstraints = MediaConstraints()
+        val audioSource = factory.createAudioSource(videoConstraints)
+        val audioTrack = factory.createAudioTrack("_audio", audioSource)
+
+        val mediaStreamLabels = listOf("ARDAMS")
+        peerConnection?.addTrack(videoTrack, mediaStreamLabels)
+        peerConnection?.addTrack(audioTrack, mediaStreamLabels)
+    }
+
+    fun createOffer(callback: ((SessionDescription) -> Unit)) {
+        onOffer = callback
+
+        peerConnection?.setAudioRecording(true)
+        peerConnection?.startRtcEventLog(0, 200)
+        peerConnection?.createOffer(this, MediaConstraints())
+    }
+
+    fun setRemoteSdp(sessionDescription: SessionDescription?) {
+        peerConnection?.setRemoteDescription(this, sessionDescription)
+    }
+
+    private fun setLocalSdp(sessionDescription: SessionDescription?) {
+        peerConnection?.setLocalDescription(this, sessionDescription)
+    }
+
+    fun createAnswer(callback: ((SessionDescription) -> Unit)) {
+        onAnswer = callback
+        peerConnection?.createAnswer(this, MediaConstraints())
+    }
+
+    fun gotStraemCallback(callback: (VideoTrack) -> Unit) {
+        onGotStream = callback
+    }
+
+    fun onIceCandidateCallback(callback: (IceCandidate?) -> Unit){
+        onIceCandidate = callback
+    }
+
     //region PeerConnection.Observer
+
+
     override fun onIceCandidate(iceCandidate: IceCandidate?) {
-        Log.i("Peer Observer", "[onSetFailure($iceCandidate)]")
+        Log.i("Peer Observer", "[onIceCandidate($iceCandidate)]")
+        onIceCandidate?.invoke(iceCandidate)
     }
 
     override fun onDataChannel(dataChannel: DataChannel?) {
@@ -151,9 +150,11 @@ class Peer : PeerConnection.Observer, SdpObserver {
 
     override fun onAddStream(p0: MediaStream?) {
         Log.i("Peer Observer", "[onAddStream($p0)]")
-        p0?.let { stream ->
-            print(stream.audioTracks.size)
-            onGotStream?.invoke(stream)
+        peerConnection?.transceivers?.firstOrNull()?.let {
+            (it.receiver.track() as? VideoTrack)?.let {
+                videoTrack = it
+                onGotStream?.invoke(it)
+            }
         }
     }
 
@@ -174,7 +175,7 @@ class Peer : PeerConnection.Observer, SdpObserver {
     }
 
     override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {
-        Log.i("Peer Observer", "[onRenegotiationNeeded($p0 , $p1)]")
+        Log.i("Peer Observer", "[onaddtrack($p0 , $p1)]")
     }
     //endregion
 
@@ -190,16 +191,13 @@ class Peer : PeerConnection.Observer, SdpObserver {
 
     override fun onCreateSuccess(seesiondescription: SessionDescription?) {
         seesiondescription?.let {
+            setLocalSdp(seesiondescription)
             when (it.type) {
                 SessionDescription.Type.OFFER -> {
-                    setLocalSdp(seesiondescription)
                     onOffer?.invoke(it)
-
                 }
                 SessionDescription.Type.ANSWER -> {
-                    setLocalSdp(seesiondescription)
                     onAnswer?.invoke(it)
-
                 }
                 else -> Log.i("Peer", "Something strange...")
             }
@@ -210,4 +208,14 @@ class Peer : PeerConnection.Observer, SdpObserver {
         Log.i("Peer SdpObserver", "[onCreateFailure($error)]")
     }
     //endregion
+
+
+
+     class PeerBuilder{
+         fun createPeer(context: Context, egl: EglBase): Peer{
+             val peer = Peer()
+             peer.initialize(context, egl)
+             return peer
+         }
+    }
 }
